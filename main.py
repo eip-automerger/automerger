@@ -47,7 +47,7 @@ class MergeHandler(webapp2.RequestHandler):
             if basedata.get("eip") != eipnum:
                 return ((eipnum,), "EIP header in %s does not match: %s" % (file.filename, basedata.get("eip")))
             if not self.check_authors(basedata.get("author"), pr.user.login, pr.user.email):
-                return ((eipnum,), "User %s is not an author of EIP %d" % (pr.user.login, eipnum))
+                return ((eipnum,), "User %s is not an author of EIP %d. If you are an author, ensure your email address is visible on your GitHub profile, or list your Github username in the EIP instead of an email address." % (pr.user.login, eipnum))
 
             logging.info("Getting file %s from %s@%s/%s", file.filename, pr.head.user.login, pr.head.repo.name, pr.head.sha)
             head = pr.head.repo.get_contents(file.filename, ref=pr.head.sha)
