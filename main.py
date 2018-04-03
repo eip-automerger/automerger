@@ -100,7 +100,8 @@ class MergeHandler(webapp2.RequestHandler):
             pr.merge(
                 commit_title="Automatically merged updates to draft EIP(s) %s" % (', '.join('%s' % x for x in eipnums)),
                 commit_message=MERGE_MESSAGE,
-                merge_method="squash")
+                merge_method="squash",
+                sha=pr.head.sha)
         elif len(reasons) > 0 and len(eipnums) > 0:
             message = "Hi! I'm a bot, and I wanted to automerge your PR, but couldn't because of the following issue(s):\n\n"
             message += "\n".join(" - " + reason for reason in reasons)
