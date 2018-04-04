@@ -1,6 +1,7 @@
 from github import Github
 
 import base64
+from collections import namedtuple
 import config
 import frontmatter
 import json
@@ -21,58 +22,95 @@ Hi, I'm a bot! This change was automatically merged because:
 
 github = Github(config.GITHUB_ACCESS_TOKEN)
 
+EIPInfo = namedtuple('EIPInfo', ('number', 'authors'))
+
+users_by_email = {}
+
+
+def find_user_by_email(email):
+    if email not in users_by_email:
+        results = list(github.search_users(email))
+        if len(results) > 0:
+            logging.info("Recording mapping from %s to %s", email, results[0].login)
+            users_by_email[email] = results[0].login
+        else:
+            logging.info("No github user found for %s", email)
+    return users_by_email.get(email)
+
+
 class MergeHandler(webapp2.RequestHandler):
-    def check_authors(self, authorlist, username, email):
-        for author in AUTHOR_RE.finditer(authorlist):
-            author = author.groups(1)[0]
-            if author.startswith("@") and author[1:] == username: return True
-            if author == email: return True
-        return False
+    def resolve_author(self, author):
+        if author.startswith('@'):
+            return author.lower()
+        else:
+            # Email address
+            return (find_user_by_email(author) or author).lower()
+
+    def get_authors(self, authorlist):
+        return set(self.resolve_author(author.groups(1)[0]) for author in AUTHOR_RE.finditer(authorlist))
 
     def check_file(self, pr, file):
         try:
             match = FILE_RE.search(file.filename)
             if not match:
-                return ((), "File %s is not an EIP" % (file.filename,))
+                return (None, "File %s is not an EIP" % (file.filename,))
             eipnum = int(match.group(1))
 
             if file.status == "added":
-                return ((), "Contains new file %s" % (file.filename,))
+                return (None, "Contains new file %s" % (file.filename,))
 
             logging.info("Getting file %s from %s@%s/%s", file.filename, pr.base.user.login, pr.base.repo.name, pr.base.sha)
             base = pr.base.repo.get_contents(file.filename, ref=pr.base.sha)
             basedata = frontmatter.loads(base64.b64decode(base.content))
             if basedata.get("status") != "Draft":
-                return ((), "EIP %d is in state %s, not Draft" % (eipnum, basedata.get("status")))
+                return (None, "EIP %d is in state %s, not Draft" % (eipnum, basedata.get("status")))
+
+            eip = EIPInfo(eipnum, self.get_authors(basedata.get("author")))
+
             if basedata.get("eip") != eipnum:
-                return ((eipnum,), "EIP header in %s does not match: %s" % (file.filename, basedata.get("eip")))
-            if not self.check_authors(basedata.get("author"), pr.user.login, pr.user.email):
-                return ((eipnum,), "User %s is not an author of EIP %d. If you are an author, ensure your email address is visible on your GitHub profile, or list your Github username in the EIP instead of an email address." % (pr.user.login, eipnum))
+                return (eip, "EIP header in %s does not match: %s" % (file.filename, basedata.get("eip")))
 
             logging.info("Getting file %s from %s@%s/%s", file.filename, pr.head.user.login, pr.head.repo.name, pr.head.sha)
             head = pr.head.repo.get_contents(file.filename, ref=pr.head.sha)
             headdata = frontmatter.loads(base64.b64decode(head.content))
             if headdata.get("eip") != eipnum:
-                return ((eipnum,), "EIP header in modified file %s does not match: %s" % (file.filename, headdata.get("eip")))
+                return (eip, "EIP header in modified file %s does not match: %s" % (file.filename, headdata.get("eip")))
             if headdata.get("status") != "Draft":
-                return ((eipnum,), "Trying to change EIP %d state from Draft to %s" % (eipnum, headdata.get("status")))
+                return (eip, "Trying to change EIP %d state from Draft to %s" % (eipnum, headdata.get("status")))
 
-            return ((eipnum, ), None)
+            return (eip, None)
         except Exception, e:
             logging.exception("Exception checking file %s", file.filename)
-            return ((), "Error checking file %s" % (file.filename,))
+            return (None, "Error checking file %s" % (file.filename,))
 
     def post(self):
-        build = json.loads(self.request.get("payload"))
-        logging.info("Processing build %s...", build["number"])
-        if build.get("pull_request_number") is None:
-            logging.info("Build %s is not a PR build; quitting", build["number"])
-            return
-        prnum = int(build["pull_request_number"])
-        self.check_pr(build["repository"]["owner_name"] + "/" + build["repository"]["name"], prnum)
+        payload = json.loads(self.request.get("payload"))
+        if 'X-Github-Event' in self.request.headers:
+            event = self.request.headers['X-Github-Event']
+            logging.info("Got Github webhook event %s", event)
+            if event == "pull_request_review":
+                pr = payload["pull_request"]
+                prnum = int(pr["number"])
+                repo = pr["base"]["repo"]["full_name"]
+                logging.info("Processing review on PR %s/%d...", repo, prnum)
+                self.check_pr(repo, prnum)
+        else:
+            logging.info("Processing build %s...", payload["number"])
+            if payload.get("pull_request_number") is None:
+                logging.info("Build %s is not a PR build; quitting", payload["number"])
+                return
+            prnum = int(payload["pull_request_number"])
+            self.check_pr(payload["repository"]["owner_name"] + "/" + payload["repository"]["name"], prnum)
 
     def get(self):
         self.check_pr(self.request.get("repo"), int(self.request.get("pr")))
+
+    def get_approvals(self, pr):
+        approvals = ['@' + pr.user.login]
+        for review in pr.get_reviews():
+            if review.state == "APPROVED":
+                approvals.append('@' + review.user.login.lower())
+        return approvals
 
     def check_pr(self, reponame, prnum):
         logging.info("Checking PR %d on %s", prnum, reponame)
@@ -85,40 +123,49 @@ class MergeHandler(webapp2.RequestHandler):
             logging.info("PR %d mergeable state is %s; quitting", prnum, pr.mergeable_state)
             return
 
-        eipnums = []
-        reasons = []
+        eips = []
+        errors = []
         for file in pr.get_files():
-            file_eipnums, message = self.check_file(pr, file)
-            eipnums.extend(file_eipnums)
-            if message is not None:
-                logging.info(message)
-                reasons.append(message)
+            eip, error = self.check_file(pr, file)
+            if eip is not None:
+                eips.append(eip)
+            if error is not None:
+                logging.info(error)
+                errors.append(error)
 
-        if len(reasons) == 0:
+        reviewers = set()
+        approvals = self.get_approvals(pr)
+        for eip in eips:
+            if len(eip.authors) == 0:
+                errors.append("EIP %d has no identifiable authors who can approve PRs" % (eip.number,))
+            elif eip.authors.isdisjoint(approvals):
+                errors.append("EIP %d requires approval from one of (%s)" % (eip.number, ', '.join(eip.authors)))
+                for author in eip.authors:
+                    if author.startswith('@'):
+                        reviewers.add(author[1:])
+
+        if len(errors) == 0:
             logging.info("Merging PR %d!", prnum)
             self.response.write("Merging PR %d!" % (prnum,))
             pr.merge(
-                commit_title="Automatically merged updates to draft EIP(s) %s" % (', '.join('%s' % x for x in eipnums)),
+                commit_title="Automatically merged updates to draft EIP(s) %s" % (', '.join('%s' % eip.number for eip in eips)),
                 commit_message=MERGE_MESSAGE,
                 merge_method="squash",
                 sha=pr.head.sha)
-        elif len(reasons) > 0 and len(eipnums) > 0:
+        elif len(errors) > 0 and len(eips) > 0:
             message = "Hi! I'm a bot, and I wanted to automerge your PR, but couldn't because of the following issue(s):\n\n"
-            message += "\n".join(" - " + reason for reason in reasons)
+            message += "\n".join(" - " + error for error in errors)
 
             self.post_comment(pr, message)
 
     def post_comment(self, pr, message):
         me = github.get_user()
-        for comment in pr.get_issue_comments().reversed:
-            logging.info("Comment by %s", comment.user.login)
+        for comment in pr.get_issue_comments():
             if comment.user.login == me.login:
                 logging.info("Found comment by myself")
-                if comment.body == message:
-                    logging.info("Refusing to post identical message on PR %d", pr.number)
-                    return
-                else:
-                    break
+                if comment.body != message:
+                    comment.edit(message)
+                return
         pr.create_issue_comment(message)
 
 
