@@ -32,7 +32,7 @@ def find_user_by_email(email):
         results = list(github.search_users(email))
         if len(results) > 0:
             logging.info("Recording mapping from %s to %s", email, results[0].login)
-            users_by_email[email] = results[0].login
+            users_by_email[email] = '@' + results[0].login
         else:
             logging.info("No github user found for %s", email)
     return users_by_email.get(email)
