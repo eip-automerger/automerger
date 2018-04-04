@@ -16,7 +16,7 @@ MERGE_MESSAGE = """
 Hi, I'm a bot! This change was automatically merged because:
 
  - It only modifies existing draft EIP(s)
- - The creator of this PR is listed as an author on all modified EIP(s)
+ - The PR was approved or written by at least one author of each modified EIP
  - The build is passing
 """
 
