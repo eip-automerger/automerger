@@ -106,7 +106,7 @@ class MergeHandler(webapp2.RequestHandler):
         self.check_pr(self.request.get("repo"), int(self.request.get("pr")))
 
     def get_approvals(self, pr):
-        approvals = ['@' + pr.user.login]
+        approvals = ['@' + pr.user.login.lower()]
         for review in pr.get_reviews():
             if review.state == "APPROVED":
                 approvals.append('@' + review.user.login.lower())
@@ -135,7 +135,9 @@ class MergeHandler(webapp2.RequestHandler):
 
         reviewers = set()
         approvals = self.get_approvals(pr)
+        logging.info("Found approvals for %d: %r", prnum, approvals)
         for eip in eips:
+            logging.info("EIP %d has authors: %r", eip.number, eip.authors)
             if len(eip.authors) == 0:
                 errors.append("EIP %d has no identifiable authors who can approve PRs" % (eip.number,))
             elif eip.authors.isdisjoint(approvals):
