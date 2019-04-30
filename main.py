@@ -150,7 +150,7 @@ class MergeHandler(webapp2.RequestHandler):
             logging.info("Merging PR %d!", prnum)
             self.response.write("Merging PR %d!" % (prnum,))
             pr.merge(
-                commit_title="Automatically merged updates to draft EIP(s) %s" % (', '.join('%s' % eip.number for eip in eips)),
+                commit_title="Automatically merged updates to draft EIP(s) %s (#%d)" % (', '.join('%s' % eip.number for eip in eips), prnum),
                 commit_message=MERGE_MESSAGE,
                 merge_method="squash",
                 sha=pr.head.sha)
