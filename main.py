@@ -15,7 +15,7 @@ AUTHOR_RE = re.compile("[(<]([^>)]+)[>)]")
 MERGE_MESSAGE = """
 Hi, I'm a bot! This change was automatically merged because:
 
- - It only modifies existing draft EIP(s)
+ - It only modifies existing Draft or Last Call EIP(s)
  - The PR was approved or written by at least one author of each modified EIP
  - The build is passing
 """
@@ -62,8 +62,8 @@ class MergeHandler(webapp2.RequestHandler):
             logging.info("Getting file %s from %s@%s/%s", file.filename, pr.base.user.login, pr.base.repo.name, pr.base.sha)
             base = pr.base.repo.get_contents(file.filename, ref=pr.base.sha)
             basedata = frontmatter.loads(base64.b64decode(base.content))
-            if basedata.get("status") != "Draft":
-                return (None, "EIP %d is in state %s, not Draft" % (eipnum, basedata.get("status")))
+            if basedata.get("status").lower() not in ("draft", "last call"):
+                return (None, "EIP %d is in state %s, not Draft or Last Call" % (eipnum, basedata.get("status")))
 
             eip = EIPInfo(eipnum, self.get_authors(basedata.get("author")))
 
@@ -75,8 +75,8 @@ class MergeHandler(webapp2.RequestHandler):
             headdata = frontmatter.loads(base64.b64decode(head.content))
             if headdata.get("eip") != eipnum:
                 return (eip, "EIP header in modified file %s does not match: %s" % (file.filename, headdata.get("eip")))
-            if headdata.get("status") != "Draft":
-                return (eip, "Trying to change EIP %d state from Draft to %s" % (eipnum, headdata.get("status")))
+            if headdata.get("status").lower() != basedata.get("status").lower():
+                return (eip, "Trying to change EIP %d state from %s to %s" % (eipnum, basedata.get("status"), headdata.get("status")))
 
             return (eip, None)
         except Exception, e:
