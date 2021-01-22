@@ -15,7 +15,7 @@ AUTHOR_RE = re.compile("[(<]([^>)]+)[>)]")
 MERGE_MESSAGE = """
 Hi, I'm a bot! This change was automatically merged because:
 
- - It only modifies existing Draft or Last Call EIP(s)
+ - It only modifies existing Draft, Review, or Last Call EIP(s)
  - The PR was approved or written by at least one author of each modified EIP
  - The build is passing
 """
@@ -36,6 +36,9 @@ def find_user_by_email(email):
         else:
             logging.info("No github user found for %s", email)
     return users_by_email.get(email)
+
+
+ALLOWED_STATUSES = set(['draft', 'last call', 'review'])
 
 
 class MergeHandler(webapp2.RequestHandler):
@@ -62,7 +65,7 @@ class MergeHandler(webapp2.RequestHandler):
             logging.info("Getting file %s from %s@%s/%s", file.filename, pr.base.user.login, pr.base.repo.name, pr.base.sha)
             base = pr.base.repo.get_contents(file.filename, ref=pr.base.sha)
             basedata = frontmatter.loads(base64.b64decode(base.content))
-            if basedata.get("status").lower() not in ("draft", "last call"):
+            if basedata.get("status").lower() not in ALLOWED_STATUSES:
                 return (None, "EIP %d is in state %s, not Draft or Last Call" % (eipnum, basedata.get("status")))
 
             eip = EIPInfo(eipnum, self.get_authors(basedata.get("author")))
